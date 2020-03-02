@@ -1,0 +1,9 @@
+pandoc: '2.2'
+pkgdown: 1.4.1
+pkgdown_sha: ~
+articles:
+  efficiency: efficiency.html
+  plain_text: plain_text.html
+  version_control: version_control.html
+  workflow: workflow.html
+
