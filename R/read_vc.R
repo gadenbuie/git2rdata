@@ -156,3 +156,97 @@ reinstate <- function(raw_data, col_names, col_classes, details, optimize) {
 read_vc.git_repository <- function(file, root) {
   read_vc(file, root = workdir(root))
 }
+
+#' Locate Project Root at Git Reference
+#'
+#' Returns a `git_tree` object representing the project root at the given
+#' reference, typically a branch name or a commit SHA. When combined with
+#' [read_vc()], this function lets users load data at a particular point in time
+#' (specifically at a given commit snapshot) without having to explicitly check
+#' out the reference using `git` directly.
+#'
+#' @inheritParams read_vc
+#' @param ref A `git` reference: a branch name, tag name, or commit hash (sha).
+#'
+#' @return A `git_tree` object to be used by `read_vc()` to read a `git2rdata`
+#'   file at a particular point in time.
+#'
+#' @examples
+#'
+#' # Use a temporary directory for this example
+#' dir.create(tmpdir <- tempfile())
+#' owd <- setwd(tmpdir)
+#'
+#' # Create our first data commit
+#' set.seed(42)
+#' x <- data.frame(x = 1:5, y = runif(5))
+#'
+#' git2r::init()
+#' write_vc(x, "example", sorting = "x")
+#' git2r::add(path = "example*")
+#' git2r::commit(message = "First commit")
+#' git2r::tag(name = "v0.0.1")
+#'
+#' x <- rbind(data.frame(x = 6:10, y = runif(5)))
+#' write_vc(x, "example", stage = TRUE)
+#' git2r::add(path = "example*")
+#' git2r::commit(message = "Second commit")
+#'
+#' root_at_ref(ref = "v0.0.1")
+#' read_vc("example", root_at_ref(ref = "v0.0.1"))
+#'
+#' @export
+root_at_ref <- function(root = ".", ref = "HEAD") {
+  assert_that(is.string(ref))
+
+  if (!inherits(root, "git_repository")) {
+    root <- git2r::repository(root)
+  }
+  commit <- git2r::revparse_single(root, revision = ref)
+  tree <- git2r::tree(commit)
+  attributes(tree)$ref <- ref
+  tree
+}
+
+
+#' @export
+read_vc.git_tree <- function(file, root) {
+  assert_that(is.string(file))
+  path_file <- sub("[.](tsv|yml)$", "", basename(file))
+  path_dir <- dirname(file)
+  path_parts <- strsplit(dirname(file), "^(?=/)(?!//)|(?<!^)(?<!^/)/", perl = TRUE)[[1]]
+
+  ref <- attributes(root)$ref
+  if (path_parts != ".") {
+    for (path_part in path_parts) {
+      root <- root[path_part]
+    }
+  }
+
+  x <- list()
+  for (type in c(".tsv", ".yml")) {
+    path_file_type <- paste0(path_file, type)
+    if (!path_file_type %in% root$name) {
+      stop(
+        path_dir, "/", path_file_type,
+        " not found at ref: ", ref
+      )
+    }
+    x[[c(".tsv" = "data", ".yml" = "meta")[type]]] <- root[path_file_type]
+  }
+
+  tmpdir <- tempfile()
+  dir.create(tmpdir)
+
+  tmp_data <- file.path(tmpdir, paste0(path_file, ".tsv"))
+  tmp_meta <- file.path(tmpdir, paste0(path_file, ".yml"))
+  on.exit(unlink(tmpdir, recursive = TRUE))
+
+  data <- git2r::content(x$data, split = TRUE)
+  writeLines(data, con = tmp_data)
+
+  meta <- git2r::content(x$meta, split = TRUE)
+  writeLines(meta, con = tmp_meta)
+
+  read_vc(path_file, root = dirname(tmp_data))
+}
